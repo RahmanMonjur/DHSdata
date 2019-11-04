@@ -1,0 +1,1713 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statsmodels.api as sm
+import scipy.stats as st
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, Imputer
+from sklearn.feature_selection import RFE
+from sklearn.linear_model import LogisticRegression
+from sklearn import metrics
+from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve, precision_score, recall_score, f1_score, cohen_kappa_score
+from sklearn import model_selection
+from sklearn.model_selection import cross_val_score
+%matplotlib inline
+plt.style.use('seaborn-white')
+pd.set_option('display.expand_frame_repr', False)
+from IPython.display import display, HTML
+
+df = pd.read_csv("/MasterFiles/MyAnalysis/DHSdata/dhs.csv", sep=',' , low_memory=False)
+#df = df.fillna(0)
+#df = df.dropna()
+
+X = pd.DataFrame()
+X['dhs']=df.dhsno
+X['dhsyr'] = df.dhsyear
+X['verno'] = df.verno
+X['totanc'] = df.totanc
+X['asset'] = df.v190.astype(int)
+X['mage'] = df.mage
+X['magecat'] = df.magecat
+X['medu'] = df.v106.astype(int)
+X['parity'] = df.v201.astype(int)
+X['urban'] = df.v102
+X['wantpreg'] = df.want_preg.fillna(1).astype(int)
+X['ancdoct'] = df.anc_doct.fillna(1).astype(int)
+X['anc_nurse_raw'] = df.anc_nurs.fillna(1).astype(int)
+#X['employ'] = df.v716
+
+X['ancdoctonly']=0
+X.loc[(X['totanc'] > 0) & (X['ancdoct'] == 1) & (X['anc_nurse_raw'] == 0), 'ancdoctonly'] = 1
+
+X['ancnurs']=0
+X.loc[(X['totanc'] > 0) & (X['ancdoct'] != 1) & (X['anc_nurse_raw'] == 1), 'ancnurs'] = 1
+
+X['ancother']=0
+X.loc[(X['totanc'] > 0) & (X['ancdoct'] == 0) & (X['ancnurs'] == 0), 'ancother'] = 1
+
+#X.medu.fillna(0)
+X.medu = X.medu+1
+X.parity = X.parity-1
+X.urban = X.urban.replace(2, 0)
+X.wantpreg= X.wantpreg.replace(0, 1)
+
+X['agecat'] = 0
+X.loc[(X['mage'] > 0) & (X['mage'] <= 18), 'agecat'] = 1
+X.loc[(X['mage'] > 18) & (X['mage'] <= 25), 'agecat'] = 2
+X.loc[(X['mage'] > 25) & (X['mage'] <= 32), 'agecat'] = 3
+X.loc[(X['mage'] > 32), 'agecat'] = 4
+
+X['paritycat'] = 1
+X.loc[(X['parity'] > 0) & (X['parity'] <= 1), 'paritycat'] = 2
+X.loc[(X['parity'] > 1) & (X['parity'] <= 3), 'paritycat'] = 3
+X.loc[(X['parity'] > 3), 'paritycat'] = 4
+
+X['anccat'] = 1
+X.loc[(X['totanc'] == 1), 'anccat'] = 2
+X.loc[(X['totanc'] == 2), 'anccat'] = 3
+X.loc[(X['totanc'] == 3), 'anccat'] = 4
+X.loc[(X['totanc'] > 3), 'anccat'] = 5
+
+#X['occup'] = 0
+#X.loc[(X['employ'] > 0) & (X['employ'] < 97), 'occup'] = 1
+
+X['delplace'] = df.delplace
+X.delplace= X.delplace.replace(4, 2)
+
+X['homedel']=df.homedel
+X['facdel'] = df.facdel
+X['facdel'] = df.facdel
+X['publicdel'] = df.publicdel
+X['privatdel'] =df.privatdel
+X['ngodel'] = df.ngodel
+X['noprofdel'] = 0
+X.loc[((X['publicdel'] == 1) | (X['ngodel'] == 1)), 'noprofdel'] = 1
+X['cs'] = df.del_cs.fillna(0).astype(int)
+
+X.dhsyr= X.dhsyr.replace(2007, 2006)
+X['yrcat'] = 0
+X.loc[(X['dhsyr'] > 2010), 'yrcat'] = 1
+
+#imp = Imputer (missing_values='NaN', strategy='median', axis=0)
+#imp.fit(X)
+#X=pd.DataFrame(data=imp.transform(X), columns=X.columns)
+X = X.dropna()
+finaldf= X.copy()
+
+countries = ['BANGLADESH','PAKISTAN','NEPAL','INDIA']
+X = X[(X.dhsyr > 2005) & (X.dhs.isin(countries)) & (X.delplace>0) & ((X.dhs+X.dhsyr.map(str)) != 'BANGLADESH2011') & ((X.dhs+X.dhsyr.map(str)) != 'NEPAL2011')]
+samp = pd.crosstab([X.dhs],[X.yrcat])
+samp.columns = ['2006', '2014']
+print(samp)
+
+#print('Percentage of deliveries by places')
+deldf = pd.crosstab([X['dhs'],X['dhsyr']], X['delplace'], normalize='index')
+deldf.columns = ['Home', 'Public','Private']
+deldf.Home = (deldf.Home*100).round(1)
+deldf.Public = (deldf.Public*100).round(1)
+deldf.Private = (deldf.Private*100).round(1)
+#deldf.loc[('INDIA', 2015),:] = [21.1,52.1,26.8,0]
+deldf.sort_index(inplace=True)
+delfig = deldf.plot(kind='bar', stacked=False, title='Percentage of delivery by places', width=0.6, figsize=(12,4) )
+delfig.legend(['Home', 'Not-for-profit','For-profit'], loc='center left', bbox_to_anchor=(1.0, 0.5))
+delfig.set_xlabel('country, year')
+delfig.set_ylim(0,100)
+#delfig.set_facecolor("white")
+delfig.set_ylabel('Percentage of deliveries')
+for i in delfig.patches:
+    delfig.text(i.get_x()+.04, i.get_height()+6, str(round((i.get_height()),1)), fontsize=9, color='dimgrey', rotation=90)
+
+print(deldf)
+print('')
+
+#print('Facility deliveries in SAARC')
+facdeldf = pd.crosstab([X['dhs'],X['dhsyr']], X['facdel'], normalize='index' )
+facdeldf.columns = ['No', 'Yes']
+facdeldf.No = np.floor((facdeldf.No*100)).round(1)
+facdeldf.Yes = np.ceil((facdeldf.Yes*100)).round(1)
+#facdeldf.loc[('INDIA', 2015),:] = [21.1,78.9]
+facdeldf.sort_index(inplace=True)
+facdelfig = facdeldf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4), title='Percentage of facility delivery in different countries')
+facdelfig.legend(["Home", "Facility"],loc='center left', bbox_to_anchor=(1.0, 0.5))
+facdelfig.set_xlabel('country, year')
+facdelfig.set_ylabel('Percentage of deliveries')
+facdelfig.set_ylim(0,100)
+#facdelfig.set_facecolor("white")
+for i in facdelfig.patches:
+    facdelfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(facdeldf.to_html()))
+print('')
+
+#print('Percentage of deliveries in public facility')
+publicdeldf = pd.crosstab([X['dhs'],X['dhsyr']], X['noprofdel'], normalize='index' )
+publicdeldf.columns = ['No', 'Yes']
+publicdeldf.No = np.floor((publicdeldf.No*100)).round(1)
+publicdeldf.Yes = np.ceil((publicdeldf.Yes*100)).round(1)
+#publicdeldf.loc[('INDIA', 2015),:] = [72.3,26.8]
+publicdeldf.sort_index(inplace=True)
+publicdelfig = publicdeldf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4),title='Percentage of delivery in public facilities')
+publicdelfig.legend(["Other", "not-for-profit"],loc='center left', bbox_to_anchor=(1.0, 0.5))
+publicdelfig.set_xlabel('country, year')
+publicdelfig.set_ylabel('Percentage of deliveries')
+publicdelfig.set_ylim(0,100)
+for i in publicdelfig.patches:
+    publicdelfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(publicdeldf.to_html()))
+print('')
+
+#print('Percentage of deliveries in private facility')
+privatdeldf = pd.crosstab([X['dhs'],X['dhsyr']], X['privatdel'], normalize='index' )
+privatdeldf.columns = ['No', 'Yes']
+privatdeldf.No = np.floor((privatdeldf.No*100)).round(1)
+privatdeldf.Yes = np.ceil((privatdeldf.Yes*100)).round(1)
+#privatdeldf.loc[('INDIA', 2015),:] = [72.3,26.8]
+privatdeldf.sort_index(inplace=True)
+privatdelfig = privatdeldf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4),title='Percentage of delivery in private facilities')
+privatdelfig.legend(["Other", "Private"],loc='center left', bbox_to_anchor=(1.0, 0.5))
+privatdelfig.set_xlabel('country, year')
+privatdelfig.set_ylabel('Percentage of deliveries')
+privatdelfig.set_ylim(0,100)
+for i in privatdelfig.patches:
+    privatdelfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(privatdeldf.to_html()))
+print('')
+
+deltypedf = pd.crosstab([X['dhs'],X['dhsyr']], X['cs'], normalize='index' )
+deltypedf.columns = ['No', 'Yes']
+deltypedf.No = (deltypedf.No*100).round(1)
+deltypedf.Yes = (deltypedf.Yes*100).round(1)
+deltypedf.sort_index(inplace=True)
+deltypefig = deltypedf.plot(kind='bar', stacked=False, title='Percentage of delivery types', width=0.6, figsize=(10,4))
+deltypefig.legend(['NVD','C-Section'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+deltypefig.set_xlabel('country, year')
+deltypefig.set_ylabel('Percentage of deliveries')
+deltypefig.set_ylim(0,100)
+for i in deltypefig.patches:
+    deltypefig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(deltypedf.to_html()))
+print('')
+
+delcsdf = pd.crosstab([X['dhs'],X['dhsyr']], [X['cs'],X['delplace']], normalize='index' )
+delcsdf=delcsdf.drop(delcsdf.columns[[0,1,2]], axis=1)
+delcsdf.columns = ['Public', 'Private']
+delcsdf.Public = np.floor(delcsdf.Public*100).round(1)
+delcsdf.Private = np.ceil(delcsdf.Private*100).round(1)
+display(HTML(delcsdf.to_html()))
+csfig = delcsdf.plot(kind='bar', stacked=False, title='Percentage of C-section deliveries in different facilities', width=0.6, figsize=(10,4))
+csfig.legend(['Not-for-profit','For-profit'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+csfig.set_xlabel('country, year')
+csfig.set_ylabel('Percentage of deliveries')
+csfig.set_ylim(0,30)
+for i in csfig.patches:
+    csfig.text(i.get_x()+.06, i.get_height()+1, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+print('')
+
+#print('Percentage of C-Section deliveries')
+Y=X[(X.facdel == 1)]
+csdeldf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+csdeldf.columns = ['No', 'Yes']
+csdeldf.No = np.floor((csdeldf.No*100)).round(1)
+csdeldf.Yes = np.ceil((csdeldf.Yes*100)).round(1)
+#csdeldf.loc[('INDIA', 2015),:] = [82.8,17.2]
+csdeldf.sort_index(inplace=True)
+
+Y= X[(X.noprofdel == 1)]
+publiccsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+publiccsdf.columns = ['No', 'Yes']
+publiccsdf.No = np.floor((publiccsdf.No*100)).round(1)
+publiccsdf.Yes = np.ceil((publiccsdf.Yes*100)).round(1)
+#publiccsdf.loc[('INDIA', 2015),:] = [88.1,11.9]
+publiccsdf.sort_index(inplace=True)
+
+Y= X[(X.privatdel == 1)]
+privatcsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+privatcsdf.columns = ['No', 'Yes']
+privatcsdf.No = np.floor((privatcsdf.No*100)).round(1)
+privatcsdf.Yes = np.ceil((privatcsdf.Yes*100)).round(1)
+#privatcsdf.loc[('INDIA', 2015),:] = [59.1,40.9]
+privatcsdf.sort_index(inplace=True)
+
+csdf = pd.concat([csdeldf,publiccsdf, privatcsdf], axis=1)
+csdf=csdf.drop(csdf.columns[[0,2,4]], axis=1)
+csdf.columns = ['All', 'Public','Private']
+csfig = csdf.plot(kind='bar', stacked=False, title='Percentage of C-Section deliveries conducted in respective facilities', width=0.6, figsize=(10,4))
+csfig.legend(['All','Not-for-profit','For-profit'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+csfig.set_xlabel('country, year')
+csfig.set_ylabel('Percentage of deliveries')
+csfig.set_ylim(0,100)
+for i in csfig.patches:
+    csfig.text(i.get_x()+.04, i.get_height()+6, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(csdf.to_html()))
+print('')
+
+#print('Perecntage of C-section deliveries in urban/rural facilities')
+Y= X[(X.urban == 0)]
+upubliccsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+upubliccsdf.columns = ['No', 'Yes']
+upubliccsdf.No = (upubliccsdf.No*100).round(1)
+upubliccsdf.Yes = (upubliccsdf.Yes*100).round(1)
+#upubliccsdf.loc[('INDIA', 2015),:] = [55.2,44.8]
+upubliccsdf.sort_index(inplace=True)
+Y= X[(X.urban == 1)]
+rpubliccsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+rpubliccsdf.columns = ['No', 'Yes']
+rpubliccsdf.No = (rpubliccsdf.No*100).round(1)
+rpubliccsdf.Yes = (rpubliccsdf.Yes*100).round(1)
+#rpubliccsdf.loc[('INDIA', 2015),:] = [62.2,37.8]
+rpubliccsdf.sort_index(inplace=True)
+urbrurpubldf = pd.concat([upubliccsdf,rpubliccsdf], axis=1)
+urbrurpubldf=urbrurpubldf.drop(urbrurpubldf.columns[[0,2]], axis=1)
+urbrurpubldf.columns = ['Rural', 'Urban']
+urbrurpublfig = urbrurpubldf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4),title='Percentage of C-section deliveries among urban/rural residents')
+urbrurpublfig.legend(['Rural','Urban'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+urbrurpublfig.set_xlabel('country, year')
+urbrurpublfig.set_ylabel('Percentage of deliveries')
+urbrurpublfig.set_ylim(0,100)
+for i in urbrurpublfig.patches:
+    urbrurpublfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(urbrurpubldf.to_html()))
+
+#print('Perecntage of C-section deliveries in urban/rural facilities')
+Y= X[(X.urban == 0)]
+rurcsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], [Y['cs'],Y['delplace']], normalize='index')
+rurcsdf=rurcsdf.drop(rurcsdf.columns[[0,1,2]], axis=1)
+rurcsdf.columns = ['rurpub', 'rurpri']
+rurcsdf.rurpub = np.ceil(rurcsdf.rurpub*100).round(1)
+rurcsdf.rurpri = np.ceil(rurcsdf.rurpri*100).round(1)
+Y= X[(X.urban == 1)]
+urbcsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], [Y['cs'],Y['delplace']], normalize='index')
+urbcsdf=urbcsdf.drop(urbcsdf.columns[[0,1,2]], axis=1)
+urbcsdf.columns = ['urbpub', 'urbpri']
+urbcsdf.urbpub = np.ceil(urbcsdf.urbpub*100).round(1)
+urbcsdf.urbpri = np.ceil(urbcsdf.urbpri*100).round(1)
+urbrurdf = pd.concat([rurcsdf,urbcsdf], axis=1)
+urbrurdf.columns = ['Rural not-for-profit','Rural for-profit', 'Urban not-for-profit','Urban for-profit']
+urbrurfig = urbrurdf.plot(kind='bar', stacked=False, width=0.9, figsize=(10,4),title='Percentage of C-section deliveries among urban/rural residents in different facilities')
+urbrurfig.legend(['Rural not-for-profit','Rural for-profit', 'Urban not-for-profit','Urban for-profit'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+urbrurfig.set_xlabel('country, year')
+urbrurfig.set_ylabel('Percentage of deliveries')
+urbrurfig.set_ylim(0,30)
+for i in urbrurfig.patches:
+    urbrurfig.text(i.get_x()+.05, i.get_height()+1, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(urbrurdf.to_html()))
+print('')
+
+
+#print('Perecntage of C-section deliveries in urban/rural public facilities')
+Y= X[(X.noprofdel == 1) & (X.urban == 0)]
+upubliccsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+upubliccsdf.columns = ['No', 'Yes']
+upubliccsdf.No = (upubliccsdf.No*100).round(1)
+upubliccsdf.Yes = (upubliccsdf.Yes*100).round(1)
+#upubliccsdf.loc[('INDIA', 2015),:] = [55.2,44.8]
+upubliccsdf.sort_index(inplace=True)
+Y= X[(X.noprofdel == 1) & (X.urban == 1)]
+rpubliccsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+rpubliccsdf.columns = ['No', 'Yes']
+rpubliccsdf.No = (rpubliccsdf.No*100).round(1)
+rpubliccsdf.Yes = (rpubliccsdf.Yes*100).round(1)
+#rpubliccsdf.loc[('INDIA', 2015),:] = [62.2,37.8]
+rpubliccsdf.sort_index(inplace=True)
+urbrurpubldf = pd.concat([upubliccsdf,rpubliccsdf], axis=1)
+urbrurpubldf=urbrurpubldf.drop(urbrurpubldf.columns[[0,2]], axis=1)
+urbrurpubldf.columns = ['Rural', 'Urban']
+urbrurpublfig = urbrurpubldf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4),title='Perecntage of C-section deliveries of urban/rural residents in public facilities')
+urbrurpublfig.legend(['Rural','Urban'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+urbrurpublfig.set_xlabel('country, year')
+urbrurpublfig.set_ylabel('Percentage of deliveries')
+urbrurpublfig.set_ylim(0,100)
+for i in urbrurpublfig.patches:
+    urbrurpublfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(urbrurpubldf.to_html()))
+print('')
+
+#print('Perecntage of C-section deliveries in urban/rural private facilities')
+Y= X[(X.privatdel == 1) & (X.urban == 0)]
+uprivatcsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+uprivatcsdf.columns = ['No', 'Yes']
+uprivatcsdf.No = np.ceil((uprivatcsdf.No*100)).round(1)
+uprivatcsdf.Yes = np.ceil((uprivatcsdf.Yes*100)).round(1)
+#uprivatcsdf.loc[('INDIA', 2015),:] = [55.2,44.8]
+uprivatcsdf.sort_index(inplace=True)
+Y= X[(X.privatdel == 1) & (X.urban == 1)]
+rprivatcsdf = pd.crosstab([Y['dhs'],Y['dhsyr']], Y['cs'], normalize='index' )
+rprivatcsdf.columns = ['No', 'Yes']
+rprivatcsdf.No = np.ceil((rprivatcsdf.No*100)).round(1)
+rprivatcsdf.Yes = np.ceil((rprivatcsdf.Yes*100)).round(1)
+#rprivatcsdf.loc[('INDIA', 2015),:] = [62.2,37.8]
+rprivatcsdf.sort_index(inplace=True)
+urbrurprivdf = pd.concat([uprivatcsdf,rprivatcsdf], axis=1)
+urbrurprivdf=urbrurprivdf.drop(urbrurprivdf.columns[[0,2]], axis=1)
+urbrurprivdf.columns = ['Rural', 'Urban']
+urbrurprivfig = urbrurprivdf.plot(kind='bar', stacked=False, width=0.6, figsize=(10,4),title='Perecntage of C-section deliveries of urban/rural residents in private facilities')
+urbrurprivfig.legend(['Rural','Urban'],loc='center left', bbox_to_anchor=(1.0, 0.5))
+urbrurprivfig.set_xlabel('country, year')
+urbrurprivfig.set_ylabel('Percentage of deliveries')
+urbrurprivfig.set_ylim(0,100)
+for i in urbrurprivfig.patches:
+    urbrurprivfig.text(i.get_x()+.09, i.get_height()+5, str(round((i.get_height()))), fontsize=9, color='dimgrey', rotation=90)
+display(HTML(urbrurprivdf.to_html()))
+print('')
+
+print('Correlation among different features')
+bdhs06=X[((X.dhs+X.dhsyr.map(str)) == 'BANGLADESH2006')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+bdhs14=X[((X.dhs+X.dhsyr.map(str)) == 'BANGLADESH2014')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+inhs06=X[((X.dhs+X.dhsyr.map(str)) == 'INDIA2006')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+inhs15=X[((X.dhs+X.dhsyr.map(str)) == 'INDIA2015')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+nphs06=X[((X.dhs+X.dhsyr.map(str)) == 'NEPAL2006')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+nphs15=X[((X.dhs+X.dhsyr.map(str)) == 'NEPAL2015')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+pkhs06=X[((X.dhs+X.dhsyr.map(str)) == 'PAKISTAN2006')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+pkhs13=X[((X.dhs+X.dhsyr.map(str)) == 'PAKISTAN2013')][['asset','magecat','medu','paritycat','urban','noprofdel','privatdel','wantpreg','anccat','ancdoct','cs']]
+
+bdhs06corr = bdhs06.corr()
+bdhs14corr = bdhs14.corr()
+inhs06corr = inhs06.corr()
+inhs15corr = inhs15.corr()
+nphs06corr = nphs06.corr()
+nphs15corr = nphs15.corr()
+pkhs06corr = pkhs06.corr()
+pkhs13corr = pkhs13.corr()
+
+labels = ['Wealth','Woman age','Woman education','Parity','urban','Public delivery','Private delivery','Wanted pregnancy','ANC category','ANC (doctor)','C-section']
+fig, axs = plt.subplots(ncols=2, nrows=4, figsize=(12,20))
+sns.heatmap(bdhs06corr, xticklabels=labels, yticklabels=labels, ax=axs[0][0], vmin=-1, vmax=1)
+sns.heatmap(bdhs14corr, xticklabels=labels, yticklabels=labels, ax=axs[0][1], vmin=-1, vmax=1)
+sns.heatmap(inhs06corr, xticklabels=labels, yticklabels=labels, ax=axs[1][0], vmin=-1, vmax=1)
+sns.heatmap(inhs15corr, xticklabels=labels, yticklabels=labels, ax=axs[1][1], vmin=-1, vmax=1)
+sns.heatmap(nphs06corr, xticklabels=labels, yticklabels=labels, ax=axs[2][0], vmin=-1, vmax=1)
+sns.heatmap(nphs15corr, xticklabels=labels, yticklabels=labels, ax=axs[2][1], vmin=-1, vmax=1)
+sns.heatmap(pkhs06corr, xticklabels=labels, yticklabels=labels, ax=axs[3][0], vmin=-1, vmax=1)
+sns.heatmap(pkhs13corr, xticklabels=labels, yticklabels=labels, ax=axs[3][1], vmin=-1, vmax=1)
+sns.plt.xticks(rotation=90)
+sns.plt.yticks(rotation=360)
+sns.set(font_scale=1.1)
+axs[0][0].set_title('Bangladesh, 2006', fontsize=11)
+axs[0][1].set_title('Bangladesh, 2014',fontsize=11)
+axs[1][0].set_title('India, 2006', fontsize=11)
+axs[1][1].set_title('India, 2015',fontsize=11)
+axs[2][0].set_title('Nepal, 2006', fontsize=11)
+axs[2][1].set_title('Nepal, 2015',fontsize=11)
+axs[3][0].set_title('Pakistan, 2006', fontsize=11)
+axs[3][1].set_title('Pakistan, 2013',fontsize=11)
+fig.tight_layout()
+sns.plt.show()
+#print(bdhs06corr.round(1))
+
+def getcrosstab_df(dft):
+    ban = dft[['a2', 'b2']].copy()
+    ind = dft[['c2', 'd2']].copy()
+    nep = dft[['e2', 'f2']].copy()
+    pak = dft[['g2', 'h2']].copy()
+    banchi, banp, bandof, banex = st.contingency.chi2_contingency(ban.values)
+    indchi, indp, inddof, index = st.contingency.chi2_contingency(ind.values)
+    nepchi, nepp, nepdof, nepex = st.contingency.chi2_contingency(nep.values)
+    pakchi, pakp, pakdof, pakex = st.contingency.chi2_contingency(pak.values)
+    
+    dft['bd'] = ((((dft.b1/dft.a1)**0.125)-1)*100).round(1).map(str)
+    dft['ind'] = ((((dft.d1/dft.c1)**0.111111111)-1)*100).round(1).map(str)
+    dft['nep'] = ((((dft.f1/dft.e1)**0.111111111)-1)*100).round(1).map(str)
+    dft['pak'] = ((((dft.h1/dft.g1)**0.142857143)-1)*100).round(1).map(str)
+    
+    #dft['Change'] = '~'+ ((dft.d1-dft.a1)/dft.a1).apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    #dft.a2 = dft.a2.map(str)+' ('+dft.a1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.b2 = dft.b2.map(str)+' ('+dft.b1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.c2 = dft.c2.map(str)+' ('+dft.c1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.d2 = dft.d2.map(str)+' ('+dft.d1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.e2 = dft.e2.map(str)+' ('+dft.e1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.f2 = dft.f2.map(str)+' ('+dft.f1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.g2 = dft.g2.map(str)+' ('+dft.g1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft.h2 = dft.h2.map(str)+' ('+dft.h1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)+')'
+    #dft = dft[['a2','b2','bd','c2','d2','ind','e2','f2','nep','g2','h2','pak']].copy()
+    dft.a1 = dft.a1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.b1 = dft.b1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.c1 = dft.c1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.d1 = dft.d1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.e1 = dft.e1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.f1 = dft.f1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.g1 = dft.g1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft.h1 = dft.h1.apply(lambda x: "{0:.1f}".format(100*x)).map(str)
+    dft = dft[['a1','b1','bd','c1','d1','ind','e1','f1','nep','g1','h1','pak']].copy()
+    dft.columns= ['2006_BD','2014_BD','AAGP_BD','2006_IN','2015_IN','AAGP_IN','2006_NP','2015_NP','AAGP_NP','2006_PK','2013_PK','AAGP_PK']
+    
+    #dft.append(pd.DataFrame({"a2":banp.round(3),"b2":np.NaN,"c2":indp.round(3),"d2":np.NaN,"e2":nepp.round(3),"f2":np.NaN,"g2":pakp.round(3),"h2":np.NaN}, index=[4]))
+    banpval= "<0.001"
+    if banp < 0.001:
+        banpval = "<0.001"
+    elif banp < 0.01:
+        banpval = "<0.01"
+    elif banp < 0.05:
+        banpval = "<0.05"
+    else:
+        banpval = ">0.05" 
+        
+    indpval= "<0.001"
+    if indp < 0.001:
+        indpval = "<0.001"
+    elif indp < 0.01:
+        indpval = "<0.01"
+    elif indp < 0.05:
+        indpval = "<0.05"
+    else:
+        indpval = ">0.05"      
+        
+    neppval= "<0.001"
+    if nepp < 0.001:
+        neppval = "<0.001"
+    elif nepp < 0.01:
+        neppval = "<0.01"
+    elif nepp < 0.05:
+        neppval = "<0.05"
+    else:
+        neppval = ">0.05"  
+    
+    pakpval= "<0.001"
+    if pakp < 0.001:
+        pakpval = "<0.001"
+    elif pakp < 0.01:
+        pakpval = "<0.01"
+    elif pakp < 0.05:
+        pakpval = "<0.05"
+    else:
+        pakpval = ">0.05"     
+        
+    dft.loc['P-Value~'] = ['',banpval,'','',indpval,'','',neppval,'','',pakpval,'']
+    return dft
+
+
+print('Background statistics')
+print('---------------------------------------------')
+assetdf1 = pd.crosstab(X.asset, [X.dhs, X.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(X.asset, [X.dhs, X.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+
+#observed_values=scipy.array(X.dhsyr)
+#expected_values=scipy.array(X.asset)
+#st = scipy.stats.chisquare(observed_values, f_exp=expected_values)
+#print(st)
+
+#print('')
+medudf1 = pd.crosstab(X.medu, [X.dhs, X.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(X.medu, [X.dhs, X.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No edu","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(X.agecat, [X.dhs, X.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(X.agecat, [X.dhs, X.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(X.paritycat, [X.dhs, X.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(X.paritycat, [X.dhs, X.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+
+#print('')
+#occdf1 = pd.crosstab(X.occup, [X.dhs, X.dhsyr] , normalize='columns')
+#occdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+#occdf2 = pd.crosstab(X.occup, [X.dhs, X.dhsyr] )
+#occdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+#occdf = getcrosstab_df(occdf2.join(occdf1))
+#occdf.index = ["No Work","Work","P-Value"]
+#display(HTML(occdf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(X.wantpreg, [X.dhs, X.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(X.wantpreg, [X.dhs, X.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(X.urban, [X.dhs, X.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(X.urban, [X.dhs, X.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(X.anccat, [X.dhs, X.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(X.anccat, [X.dhs, X.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(X.ancdoct, [X.dhs, X.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(X.ancdoct, [X.dhs, X.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+#print('')
+deltypdf1 = pd.crosstab(X.cs, [X.dhs, X.dhsyr] , normalize='columns')
+deltypdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+deltypdf2 = pd.crosstab(X.cs, [X.dhs, X.dhsyr] )
+deltypdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+deltypdf = getcrosstab_df(deltypdf2.join(deltypdf1))
+deltypdf.index = ["NVD","CS","P-Value"]
+deltypdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(deltypdf.to_html()))
+#print('')
+delplacdf1 = pd.crosstab(X.delplace, [X.dhs, X.dhsyr] , normalize='columns')
+delplacdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+delplacdf2 = pd.crosstab(X.delplace, [X.dhs, X.dhsyr] )
+delplacdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+delplacdf = getcrosstab_df(delplacdf2.join(delplacdf1))
+delplacdf.index = ["Home","Not-for-profit","For-profit","P-Value"]
+delplacdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(deltypdf.to_html()))
+#print('')
+facdeldf1 = pd.crosstab(X.facdel, [X.dhs, X.dhsyr] , normalize='columns')
+facdeldf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+facdeldf2 = pd.crosstab(X.facdel, [X.dhs, X.dhsyr] )
+facdeldf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+facdeldf = getcrosstab_df(facdeldf2.join(facdeldf1))
+facdeldf.index = ["Home","Facility","P-Value"]
+facdeldf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(deltypdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf,deltypdf,delplacdf,facdeldf]).to_html()))
+
+print('Background statistics for home delivery')
+print('---------------------------------------------')
+privatedf = X[(X.homedel == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics for public delivery')
+print('---------------------------------------------')
+privatedf = X[(X.noprofdel == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics for private delivery')
+print('---------------------------------------------')
+privatedf = X[(X.privatdel == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics for C-section delivery')
+print('---------------------------------------------')
+privatedf = X[(X.cs == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics for C-section delivery in public facility')
+print('---------------------------------------------')
+privatedf = X[(X.noprofdel == 1) & (X.cs == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics for C-section delivery in private facility')
+print('---------------------------------------------')
+privatedf = X[(X.privatdel == 1) & (X.cs == 1) ]
+assetdf1 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.asset, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Poorest","Poor","middle","Rich","Richest","P-Value"]
+assetdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(assetdf.to_html()))
+#print('')
+medudf1 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+medudf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+medudf2 = pd.crosstab(privatedf.medu, [privatedf.dhs, privatedf.dhsyr] )
+medudf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+medudf = getcrosstab_df(medudf2.join(medudf1))
+medudf.index = ["No education","1-5 year","6-10 year","11 or more","P-Value"]
+medudf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(medudf.to_html()))
+#print('')
+magedf1 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+magedf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+magedf2 = pd.crosstab(privatedf.agecat, [privatedf.dhs, privatedf.dhsyr] )
+magedf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+magedf = getcrosstab_df(magedf2.join(magedf1))
+magedf.index = ["<=18 year","19-25 year","26-32 year",">=33 year","P-Value"]
+magedf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(magedf.to_html()))
+#print('')
+paritydf1 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+paritydf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+paritydf2 = pd.crosstab(privatedf.paritycat, [privatedf.dhs, privatedf.dhsyr] )
+paritydf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+paritydf = getcrosstab_df(paritydf2.join(paritydf1))
+paritydf.index = ["Nullipara","1","2-3","4 or more","P-Value"]
+paritydf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(paritydf.to_html()))
+#print('')
+pregwantdf1 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+pregwantdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+pregwantdf2 = pd.crosstab(privatedf.wantpreg, [privatedf.dhs, privatedf.dhsyr] )
+pregwantdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+pregwantdf = getcrosstab_df(pregwantdf2.join(pregwantdf1))
+pregwantdf.index = ["Now","Later","No more","P-Value"]
+pregwantdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(pregwantdf.to_html()))
+#print('')
+residf1 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+residf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+residf2 = pd.crosstab(privatedf.urban, [privatedf.dhs, privatedf.dhsyr] )
+residf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+residf = getcrosstab_df(residf2.join(residf1))
+residf.index = ["Rural","Urban","P-Value"]
+residf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(residf.to_html()))
+#print('')
+ancdf1 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+ancdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+ancdf2 = pd.crosstab(privatedf.anccat, [privatedf.dhs, privatedf.dhsyr] )
+ancdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+ancdf = getcrosstab_df(ancdf2.join(ancdf1))
+ancdf.index = ["No ANC","1 ANC","2 ANC","3 ANC",">= 4 ANC","P-Value"]
+ancdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(ancdf.to_html()))
+#print('')
+doctdf1 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+doctdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+doctdf2 = pd.crosstab(privatedf.ancdoct, [privatedf.dhs, privatedf.dhsyr] )
+doctdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+doctdf = getcrosstab_df(doctdf2.join(doctdf1))
+doctdf.index = ["Other","Doctor","P-Value"]
+doctdf.loc[''] = ['','','','','','','','','','','','']
+#display(HTML(doctdf.to_html()))
+
+display(HTML(pd.concat([magedf,assetdf,medudf,paritydf,residf,pregwantdf,ancdf,doctdf]).to_html()))
+
+print('Background statistics of delivery places for selected events')
+print('---------------------------------------------')
+print ('Asset Index = 1')
+print('-------------------')
+privatedf = X[(X.asset == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Asset Index = 5')
+print('-------------------')
+privatedf = X[(X.asset == 5) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('No Education')
+print('-------------------')
+privatedf = X[(X.medu == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('11 or More')
+print('-------------------')
+privatedf = X[(X.medu == 4) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('<= 18 Years Old')
+print('-------------------')
+privatedf = X[(X.agecat == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('33 or More Years ')
+print('-------------------')
+privatedf = X[(X.agecat == 4) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Nulli Para')
+print('-------------------')
+privatedf = X[(X.paritycat == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('4 or More Para ')
+print('-------------------')
+privatedf = X[(X.paritycat == 4) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('No ANC')
+print('-------------------')
+privatedf = X[(X.anccat == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('4 or more ANC')
+print('-------------------')
+privatedf = X[(X.anccat == 5) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('ANC by a Doctor')
+print('-------------------')
+privatedf = X[(X.ancdoct == 1) & (X.delplace < 4)]
+assetdf1 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.delplace, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["Home","Public","Private","P-Value"]
+display(HTML(assetdf.to_html()))
+
+print('Background statistics of C-section for selected events')
+print('---------------------------------------------')
+print ('Asset Index = 1')
+print('-------------------')
+privatedf = X[(X.asset == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Asset Index = 5')
+print('-------------------')
+privatedf = X[(X.asset == 5)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('No Education')
+print('-------------------')
+privatedf = X[(X.medu == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('11 or More')
+print('-------------------')
+privatedf = X[(X.medu == 4)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('<= 18 Years Old')
+print('-------------------')
+privatedf = X[(X.agecat == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('33 or More Years ')
+print('-------------------')
+privatedf = X[(X.agecat == 4)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Nulli Para')
+print('-------------------')
+privatedf = X[(X.paritycat == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('3 or More Parity ')
+print('-------------------')
+privatedf = X[(X.paritycat >= 3)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('No ANC or Less Than 3 ANC')
+print('-------------------')
+privatedf = X[(X.anccat <= 3)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('4 or more ANC')
+print('-------------------')
+privatedf = X[(X.anccat == 5)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('ANC by a Doctor')
+print('-------------------')
+privatedf = X[(X.ancdoct == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('ANC by Other')
+print('-------------------')
+privatedf = X[(X.ancdoct == 0)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Urban')
+print('-------------------')
+privatedf = X[(X.urban == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Rural')
+print('-------------------')
+privatedf = X[(X.urban == 0)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Wanted Pregnancy')
+print('-------------------')
+privatedf = X[(X.wantpreg == 1)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+print('')
+print ('Unwanted Pregnancy')
+print('-------------------')
+privatedf = X[(X.wantpreg == 3)]
+assetdf1 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr] , normalize='columns')
+assetdf1.columns = ['a1', 'b1','c1','d1','e1','f1','g1','h1']
+assetdf2 = pd.crosstab(privatedf.cs, [privatedf.dhs, privatedf.dhsyr]) 
+assetdf2.columns = ['a2', 'b2','c2','d2','e2','f2','g2','h2']
+assetdf = getcrosstab_df(assetdf2.join(assetdf1))
+assetdf.index = ["NVD","CS","P-Value"]
+display(HTML(assetdf.to_html()))
+
+print('Concentration Index for CS')
+print('--------------------------------------')
+condf =  X[(X.dhsyr == 2006)]
+dffac = pd.crosstab([condf.dhs, condf.dhsyr], condf.facdel, normalize="index")
+dffac.columns = ['home','pre_fac']
+dfcs = pd.crosstab([condf.dhs, condf.dhsyr], condf.cs, normalize="index")
+dfcs.columns = ['nvd','pre_cs']
+assetdf = pd.crosstab([condf.dhs, condf.dhsyr], condf.asset, normalize="index")
+assetdf.columns = ["a1","a2","a3","a4","a5"]
+condf = X[(X.dhsyr == 2006) & (X.cs==1)]
+csdf = pd.crosstab([condf.dhs, condf.dhsyr], condf.asset, normalize="index")
+csdf.columns = ["b1","b2","b3","b4","b5"]
+condf = assetdf.cumsum(axis=1).join(csdf.cumsum(axis=1))
+condf['aci'] = (condf['a1']*condf['b2']) - (condf['a2']*condf['b1'])
+condf['bci'] = (condf['a2']*condf['b3']) - (condf['a3']*condf['b2'])
+condf['cci'] = (condf['a3']*condf['b4']) - (condf['a4']*condf['b3'])
+condf['dci'] = (condf['a4']*condf['b5']) - (condf['a5']*condf['b4'])
+condf['ci_pre'] = condf['aci'] + condf['bci'] + condf['cci'] + condf['dci']
+predf = condf[['ci_pre']].copy()
+predf['pre_fac'] = dffac.pre_fac
+predf['pre_cs'] = dfcs.pre_cs
+predf = predf.reset_index(drop =True)
+condf =  X[(X.dhsyr > 2010)]
+dffac = pd.crosstab([condf.dhs, condf.dhsyr], condf.facdel, normalize="index")
+dffac.columns = ['home','post_fac']
+dfcs = pd.crosstab([condf.dhs, condf.dhsyr], condf.cs, normalize="index")
+dfcs.columns = ['nvd','post_cs']
+assetdf = pd.crosstab([condf.dhs, condf.dhsyr], condf.asset, normalize="index")
+assetdf.columns = ["a1","a2","a3","a4","a5"]
+condf = X[(X.dhsyr > 2010) & (X.cs==1)]
+csdf = pd.crosstab([condf.dhs, condf.dhsyr], condf.asset, normalize="index")
+csdf.columns = ["b1","b2","b3","b4","b5"]
+condf = assetdf.cumsum(axis=1).join(csdf.cumsum(axis=1))
+condf['aci'] = (condf['a1']*condf['b2']) - (condf['a2']*condf['b1'])
+condf['bci'] = (condf['a2']*condf['b3']) - (condf['a3']*condf['b2'])
+condf['cci'] = (condf['a3']*condf['b4']) - (condf['a4']*condf['b3'])
+condf['dci'] = (condf['a4']*condf['b5']) - (condf['a5']*condf['b4'])
+condf['ci_post'] = condf['aci'] + condf['bci'] + condf['cci'] + condf['dci']
+postdf = condf[['ci_post']].copy()
+postdf['post_fac'] = dffac.post_fac
+postdf['post_cs'] = dfcs.post_cs
+postdf = postdf.reset_index(drop =True)
+cidf = pd.DataFrame()
+#cidf['country'] = ['Bangladesh','India','Nepal','Pakistan']
+cidf['pre_fac'] = predf.pre_fac.apply(lambda x: 100*x)
+cidf['pre_cs'] = predf.pre_cs.apply(lambda x: 100*x)
+cidf['pre_ci']= predf.ci_pre
+cidf['post_fac'] = postdf.post_fac.apply(lambda x: 100*x)
+cidf['post_cs'] = postdf.post_cs.apply(lambda x: 100*x)
+cidf['post_ci'] = postdf.ci_post
+cidf.index = ['Bangladesh','India','Nepal','Pakistan']
+display(HTML(cidf.to_html()))
+
+fig = cidf.plot.scatter('pre_fac', 'pre_cs', s=cidf.pre_ci * 4000, alpha=0.4, figsize=(6,4))
+fig.set_ylabel('C-section rate (%)')
+fig.set_ylim(0,30)
+fig.set_xlabel('Facility delivery rate (%)')
+fig.set_xlim(0,100)
+fig.axhline(y=0, xmin=0, xmax=1, color='k')
+fig.axhline(y=28.7, xmin=0, xmax=1, linewidth=0.5, color='k')
+fig.axvline(x=0, ymin=0, ymax=.95, color='k')
+fig.axvline(x=100, ymin=0, ymax=.95, color='k')
+fig.set_title('Inequities in C-section in 2006')
+#for i, txt in enumerate(cidf.index):
+#    fig.annotate(txt, (cidf.pre_fac.iat[i],cidf.pre_cs.iat[i]), fontsize=10, color='dimgrey', rotation=90)
+labels = ['{0}'.format(i) for i in list(cidf.index)]
+for label, x, y, z in zip(labels, cidf.pre_fac, cidf.pre_cs, cidf.pre_ci):
+    fig.annotate(
+        label + '('+ str((z*100).round(1)) + '%)',
+        xy=(x, y), xytext=(-20, 20),
+        textcoords='offset points', ha='left', va='bottom',
+        bbox=dict(fc='white', alpha=0.5),
+        arrowprops=dict(arrowstyle = '->', connectionstyle='arc3,rad=0'), fontsize=11, color='dimgrey',rotation=0)
+
+fig = cidf.plot.scatter('post_fac', 'post_cs', s=cidf.post_ci * 4000, alpha=0.4, figsize=(6,4))
+fig.set_ylabel('C-section rate (%)')
+fig.set_ylim(0,30)
+fig.set_xlabel('Facility delivery rate (%)')
+fig.set_xlim(0,100)
+fig.axhline(y=0, xmin=0, xmax=1, color='k')
+fig.axhline(y=28.7, xmin=0, xmax=1, linewidth=0.5, color='k')
+fig.axvline(x=0, ymin=0, ymax=.95, color='k')
+fig.axvline(x=100, ymin=0, ymax=.95, color='k')
+fig.set_title('Inequities in C-section in 2015')
+#for i, txt in enumerate(cidf.index):
+#    fig.annotate(txt, (cidf.pre_fac.iat[i],cidf.pre_cs.iat[i]), fontsize=10, color='dimgrey', rotation=90)
+labels = ['{0}'.format(i) for i in list(cidf.index)]
+for label, x, y, z in zip(labels, cidf.post_fac, cidf.post_cs, cidf.post_ci):
+    fig.annotate(
+        label + '('+ str((z*100).round(1)) + '%)',
+        xy=(x, y), xytext=(-20, 20),
+        textcoords='offset points', ha='left', va='bottom',
+        bbox=dict(fc='white', alpha=0.5),
+        arrowprops=dict(arrowstyle = '->', connectionstyle='arc3,rad=0'), fontsize=11, color='dimgrey',rotation=0)
+
+
+def getLogit(df1, df2):
+    logit_model=sm.Logit(df1, df2)
+    result=logit_model.fit()
+    res = np.exp(result.conf_int())
+    res['OR'] = np.exp(result.params)
+    res['B'] = result.params
+    res['S.E.'] = result.bse
+    res['p'] = result.pvalues
+    res['t'] = result.tvalues
+    res.columns = ['Conf-Low', 'Conf-High', 'exp(B)','Coef.(B)','S.Err','p-val(p)','t-val(z)']
+    res = res[['Coef.(B)','S.Err','p-val(p)','t-val(z)','exp(B)', 'Conf-Low', 'Conf-High']].sort_index(0).round(2)
+    return res
+
+def getAnalysis(preddf, incldyr):
+    preddf['y_intercept'] = 1.0
+    respdf = preddf.cs
+    #print('Not Categorized ORs')
+    #print('------------------------')
+    #unadjpreddf = preddf.drop(['dhs','dhsyr','verno','delplace','cs','homedel','facdel','ngodel','mage','magecat','totanc','parity','anc_nurse_raw','ancother'],axis=1)
+    #print(getLogit(respdf, unadjpreddf))
+    #print('')
+
+    assetdum = pd.get_dummies(preddf.asset,prefix='asset').drop(['asset_1'],axis=1)
+    assetor = assetdum.copy()
+    assetor['y_intercept'] = 1.0
+    assetdf = getLogit(respdf, assetor)
+    assetdf.drop(assetdf.tail(1).index,inplace=True)
+
+    medudum = pd.get_dummies(preddf.medu,prefix='medu').drop(['medu_1'],axis=1)
+    meduor = medudum.copy()
+    meduor['y_intercept'] = 1.0
+    medudf = getLogit(respdf, meduor)
+    medudf.drop(medudf.tail(1).index,inplace=True)
+
+    ancdum = pd.get_dummies(preddf.anccat,prefix='anc').drop(['anc_1'],axis=1)
+    ancor = ancdum.copy()
+    ancor['y_intercept'] = 1.0
+    ancdf = getLogit(respdf, ancor)
+    ancdf.drop(ancdf.tail(1).index,inplace=True)
+
+    agedum = pd.get_dummies(preddf.agecat,prefix='age').drop(['age_1'],axis=1)
+    ageor = agedum.copy()
+    ageor['y_intercept'] = 1.0
+    agedf = getLogit(respdf, ageor)
+    agedf.drop(agedf.tail(1).index,inplace=True)
+
+    paritydum = pd.get_dummies(preddf.paritycat,prefix='parity').drop(['parity_4'],axis=1)
+    parityor = paritydum.copy()
+    parityor['y_intercept'] = 1.0
+    paritydf = getLogit(respdf, parityor)
+    paritydf.drop(paritydf.tail(1).index,inplace=True)
+
+    wantpregdum = pd.get_dummies(preddf.wantpreg,prefix='wantpreg').drop(['wantpreg_1'],axis=1)
+    wantpregor = wantpregdum.copy()
+    wantpregor['y_intercept'] = 1.0
+    wantpregdf = getLogit(respdf, wantpregor)
+    wantpregdf.drop(wantpregdf.tail(1).index,inplace=True)
+
+    urbanor = preddf[['urban','y_intercept']].copy()
+    urbandf = getLogit(respdf, urbanor)
+    urbandf.drop(urbandf.tail(1).index,inplace=True)
+
+    privatdelor = preddf[['privatdel','y_intercept']].copy()
+    privatdeldf = getLogit(respdf, privatdelor)
+    privatdeldf.drop(privatdeldf.tail(1).index,inplace=True)
+
+    ancdoctor = preddf[['ancdoct','y_intercept']].copy()
+    ancdoctdf = getLogit(respdf, ancdoctor)
+    ancdoctdf.drop(ancdoctdf.tail(1).index,inplace=True)
+    if incldyr == 'Y':
+        yror = preddf[['yrcat','y_intercept']].copy()
+        yrdf = getLogit(respdf, yror)
+        yrdf.drop(yrdf.head(1).index,inplace=True)
+        
+    print('')
+    print('Unadjusted ORs')
+    print('------------------------')
+    if incldyr == 'Y':
+        unadj = [yrdf,assetdf,medudf,ancdf,agedf,paritydf,wantpregdf,urbandf,privatdeldf,ancdoctdf]
+    else:
+        unadj = [assetdf,medudf,ancdf,agedf,paritydf,wantpregdf,urbandf,privatdeldf,ancdoctdf]
+    
+    unadjdf = pd.concat(unadj)
+    display(HTML(unadjdf.sort_index(0).to_html()))
+    print('')
+    
+    
+    if incldyr == 'Y':
+        cols_to_keep = ['cs','yrcat','urban','ancdoct','privatdel','y_intercept']
+    else:
+        cols_to_keep = ['cs','urban','ancdoct','privatdel','y_intercept']
+        
+    preddf = preddf[cols_to_keep].join(ancdum).join(paritydum).join(wantpregdum).join(medudum).join(agedum).join(assetdum)
+    
+    
+    print('')
+    print('')
+    print('Adjusted OR')
+    print('------------------------')
+    train_cols = preddf.columns[1:]
+    adjdf = getLogit(preddf['cs'], preddf[train_cols])
+    display(HTML(adjdf.to_html()))
+    print('')
+    print('')
+    print('Join Table of OR')
+    print('------------------------')
+    unadjdf.columns = ['OR-Coef.(B)','OR-S.Err','OR-p-val(p)','OR-t-val(z)','OR-exp(B)', 'OR-Conf-Low', 'OR-Conf-High']
+    adjdf.columns = ['AOR-Coef.(B)','AOR-S.Err','AOR-p-val(p)','AOR-t-val(z)','AOR-exp(B)', 'AOR-Conf-Low', 'AOR-Conf-High']
+    allordf = unadjdf.join(adjdf)
+    allordf = allordf.drop(allordf.columns[[0,1,2,3,7,8,9,10]], axis=1)
+    allordf['OR'] = allordf['OR-exp(B)'].map(str) + ' [' + allordf['OR-Conf-Low'].map(str) + '-' + allordf['OR-Conf-High'].map(str)+ ']'
+    allordf['AOR'] = allordf['AOR-exp(B)'].map(str) + ' [' + allordf['AOR-Conf-Low'].map(str) + '-' + allordf['AOR-Conf-High'].map(str)+ ']'
+    display(HTML(allordf[['OR','AOR']].sort_index(0).to_html()))
+    
+    
+    outbd06df = preddf.cs
+    preddf = preddf.drop(['cs','y_intercept'],axis=1)
+
+    #scaler = StandardScaler()
+    #scaled_features= scaler.fit_transform(preddf)
+    #preddf = pd.DataFrame(scaled_features, index=preddf.index, columns=preddf.columns)
+    #logreg = LogisticRegression()
+    #rfe = RFE(logreg)
+    #rfe = rfe.fit(preddf, outbd06df )
+    #print(rfe.support_)
+    #print(rfe.ranking_)
+    
+    print('')
+    print('')
+    print('')
+    print('Machine Learning Logistic Regression Classification')
+    print('------------------------------------------------------')
+
+    X_train, X_test, y_train, y_test = train_test_split(preddf, outbd06df, test_size=0.3, random_state=0)
+
+    print('')
+    from sklearn.utils import class_weight
+    classweight = class_weight.compute_class_weight('balanced', np.unique(y_train), y_train)
+    clsweight = dict(enumerate(classweight))
+    print('class weight: {}'.format(clsweight))
+    print('')
+
+    logreg = LogisticRegression(random_state=0, class_weight = clsweight)
+    logreg.fit(X_train, y_train)
+    y_pred = logreg.predict(X_test)
+
+    print('Accuracy of logistic regression classifier on test set: {:.2f}'.format(logreg.score(X_test, y_test)))
+
+    kfold = model_selection.KFold(n_splits=10, random_state=0)
+    scoring = 'accuracy'
+    results = model_selection.cross_val_score(logreg, X_train, y_train, cv=kfold, scoring=scoring)
+    print("10-fold cross validation average accuracy: %0.2f" % (results.mean()))
+
+    print('')
+    #confusion_matrix = confusion_matrix(y_test, y_pred)
+    #print('Confusion Matrix:')
+    #print(confusion_matrix)
+    print('Classification Report:')
+    print(classification_report(y_test, y_pred))
+
+    logit_roc_auc = roc_auc_score(y_test, y_pred)
+    fpr, tpr, thresholds = roc_curve(y_test, logreg.predict_proba(X_test)[:,1])
+    auc = metrics.auc(fpr,tpr)
+    fig = plt.figure()
+    plt.rcParams['axes.facecolor']='white'
+    ax = fig.add_subplot(111)
+    lw = 2
+    line = ax.plot(fpr, tpr, color='green', lw=lw, label='Logistic Regression (area = %0.2f)' % logit_roc_auc)
+    ax.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('Receiver operating characteristic')
+    ax.legend(loc="lower right")
+    #ax.grid(color='k', linestyle=':', linewidth=0.2)
+    ax.axhline(y=0, xmin=0, xmax=1, color='k')
+    ax.axhline(y=1, xmin=0, xmax=1, linewidth=0.5, color='k')
+    ax.axvline(x=0, ymin=0, ymax=.95, color='k')
+    ax.axvline(x=1, ymin=0, ymax=.95, color='k')
+    #plt.savefig('Log_ROC')
+    plt.show()
+    return None
+    
+ print('Bangladesh 2006')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'BANGLADESH2006')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Bangladesh 2014')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'BANGLADESH2014')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Bangladesh Overall')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs) == 'BANGLADESH')]
+getAnalysis(inbd06df, 'Y')
+print('')
+print('')
+print('India 2006')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'INDIA2006')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('India 2015')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'INDIA2015')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('India Overall')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs) == 'INDIA')]
+getAnalysis(inbd06df, 'Y')
+print('')
+print('')
+print('Nepal 2006')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'NEPAL2006')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Nepal 2015')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'NEPAL2015')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Nepal Overall')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs) == 'NEPAL')]
+getAnalysis(inbd06df, 'Y')
+print('')
+print('')
+print('Pakistan 2006')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'PAKISTAN2006')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Pakistan 2013')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs+X.dhsyr.map(str)) == 'PAKISTAN2013')]
+getAnalysis(inbd06df, 'N')
+print('')
+print('')
+print('Pakistan Overall')
+print('------------------------------------------------------------------')
+inbd06df = X[((X.dhs) == 'PAKISTAN')]
+getAnalysis(inbd06df, 'Y')
+print('')
+print('')
+
+
+
